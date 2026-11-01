@@ -7,6 +7,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeEl
 
 from src.db.models import JobItem
 from src.db.storage import save_jobs
+from src.db.search import partial_match
 from src.config.companies import GREENHOUSE_COMPANIES, LEVER_COMPANIES, ASHBY_COMPANIES
 from src.scrapers.greenhouse import fetch_greenhouse_jobs
 from src.scrapers.lever import fetch_lever_jobs
@@ -68,10 +69,9 @@ async def run_pipeline(
             if progress_callback:
                 progress_callback(f"Scraped source {completed}/{total_tasks}", completed, total_tasks)
 
-    # Filter by role_filter if supplied
+    # Filter by role_filter if supplied (partial, token-aware role matching)
     if role_filter and role_filter.strip():
-        rf = role_filter.lower().strip()
-        filtered_jobs = [j for j in all_jobs if rf in j.title.lower() or rf in (j.description or "").lower()]
+        filtered_jobs = [j for j in all_jobs if partial_match(role_filter, j.title)]
     else:
         filtered_jobs = all_jobs
 

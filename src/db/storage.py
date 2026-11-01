@@ -2,11 +2,19 @@ import sqlite_utils
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 from src.db.models import JobItem
+from src.db.search import partial_match
 
 DB_PATH = Path("jobs.db")
 
 def get_db(db_path: Path = DB_PATH) -> sqlite_utils.Database:
     db = sqlite_utils.Database(db_path)
+    # Expose the partial role matcher to SQLite so query_jobs() can filter in SQL.
+    db.conn.create_function(
+        "partial_match",
+        -1,
+        lambda *args: int(partial_match(*args)),
+        deterministic=True,
+    )
     if "jobs" not in db.table_names():
         db["jobs"].create(
             {
@@ -55,16 +63,21 @@ def query_jobs(
     offset: int = 0,
     db_path: Path = DB_PATH
 ) -> List[Dict[str, Any]]:
+    """Query stored jobs.
+
+    ``search_query`` is a partial, case-insensitive role/title search:
+    "AI" matches AI Engineer, GenAI and AI/ML roles, while "data eng"
+    matches Data Engineer titles. Company and location have dedicated filters.
+    """
     db = get_db(db_path)
     conditions = []
     params = []
 
     if search_query and search_query.strip():
-        # Using FTS or LIKE query
-        clean_query = search_query.strip().lower()
-        conditions.append("(lower(title) LIKE ? OR lower(company) LIKE ? OR lower(location) LIKE ?)")
-        wildcard = f"%{clean_query}%"
-        params.extend([wildcard, wildcard, wildcard])
+        # Partial, token-aware role search: "AI" matches "AI Engineer", "GenAI",
+        # "AI/ML", etc. without matching unrelated words like "Affairs" or "Spain".
+        conditions.append("partial_match(?, coalesce(title, ''))")
+        params.append(search_query.strip())
 
     if hyderabad_only:
         conditions.append("is_hyderabad = 1")

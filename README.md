@@ -18,7 +18,7 @@ This pipeline eliminates ban risk entirely by querying:
 - **Targeted for India & Hyderabad**: Automatically detects Hyderabad and India-wide openings from GCCs and MNCs (e.g., Coinbase, Stripe, Notion, Databricks, Snowflake, Palantir, Cloudflare, etc.).
 - **Deduplication Engine**: Uses SQLite FTS and SHA-256 fingerprinting to prevent duplicate job entries across multiple runs.
 - **Interactive Streamlit Web Dashboard**:
-  - Filter by Role keyword (e.g. *Python*, *Software Engineer*, *Data*, *Frontend*).
+  - Filter by Role keyword with **partial, case-insensitive matching** (e.g. *AI* finds *AI Engineer*, *GenAI* and *AI/ML* roles; *Data Eng* finds *Data Engineer* roles).
   - Quick location toggle: **Hyderabad Only**, **All India**, or **Worldwide**.
   - Filter by Company or ATS source.
   - One-click live fetch: Trigger fresh pipeline runs directly from the UI.

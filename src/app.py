@@ -67,7 +67,14 @@ st.caption("Zero-block, automated job aggregator fetching directly from official
 # Sidebar Controls
 st.sidebar.header("🎯 Filters & Search")
 
-search_kw = st.sidebar.text_input("Role / Keyword", placeholder="e.g. Software Engineer, Data, Frontend, Analyst")
+search_kw = st.sidebar.text_input(
+    "Role / Keyword",
+    placeholder="e.g. AI, Data Eng, Frontend, Analyst",
+    help=(
+        "Partial, case-insensitive search. Try 'AI' for AI Engineer, GenAI or AI/ML roles, "
+        "or 'data eng' for Data Engineer openings."
+    ),
+)
 location_filter = st.sidebar.radio("Location Filter", ["Hyderabad Only", "All India", "Worldwide (All)"], index=0)
 
 hyd_only = (location_filter == "Hyderabad Only")
@@ -120,7 +127,10 @@ jobs_data = query_jobs(
 if not jobs_data:
     st.info("No jobs match your current search criteria. Try broadening your keywords or clicking **'Fetch Latest Jobs Now'** in the sidebar!")
 else:
-    st.subheader(f"Results ({len(jobs_data)} positions found)")
+    if search_kw and search_kw.strip():
+        st.subheader(f"Results for “{search_kw.strip()}” ({len(jobs_data)} positions found)")
+    else:
+        st.subheader(f"Results ({len(jobs_data)} positions found)")
     
     # Export options
     df = pd.DataFrame(jobs_data)
