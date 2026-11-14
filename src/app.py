@@ -13,6 +13,12 @@ from datetime import datetime
 
 from src.db.storage import query_jobs, get_stats, get_db
 from src.pipeline import run_pipeline
+from src.config.companies import (
+    CURATED_BOARDS,
+    add_discovered_companies,
+    get_all_companies,
+)
+from src.scrapers.discovery import ATS_SPECS, discover_boards
 
 st.set_page_config(
     page_title="GCC & MNC Job Hunter - India / Hyderabad",
@@ -97,6 +103,132 @@ if scrape_button:
         stats = asyncio.run(run_pipeline(role_filter=None))
         st.sidebar.success(f"Fetched {stats['fetched_total']} total jobs! ({stats['india_jobs']} India, {stats['hyderabad_jobs']} Hyderabad)")
         st.rerun()
+
+st.sidebar.divider()
+st.sidebar.subheader("🏢 Monitored Boards")
+
+_message = st.session_state.pop("board_message", None)
+if _message:
+    _level, _text = _message
+    getattr(st.sidebar, _level, st.sidebar.info)(_text)
+
+boards = get_all_companies()
+curated_total = sum(len(items) for items in CURATED_BOARDS.values())
+active_total = sum(len(items) for items in boards.values())
+st.sidebar.caption(
+    f"Greenhouse {len(boards['greenhouse'])} · Lever {len(boards['lever'])} · "
+    f"Ashby {len(boards['ashby'])} · Workable {len(boards['workable'])}"
+)
+st.sidebar.caption(f"{active_total} boards total ({active_total - curated_total} discovered)")
+
+with st.sidebar.expander(
+    "🔎 Discover companies to add",
+    expanded=bool(st.session_state.get("discovery_result")),
+):
+    st.caption(
+        "Checks public Greenhouse, Lever and Ashby boards. Nothing is added "
+        "until you select companies and confirm."
+    )
+    ats_choices = st.multiselect(
+        "Search these ATS boards",
+        options=list(ATS_SPECS),
+        default=list(ATS_SPECS),
+        format_func=str.title,
+    )
+    tokens_per_ats = st.slider("Boards to check per ATS", 10, 200, 40, 10)
+
+    if st.button("🔍 Find companies", use_container_width=True):
+        if not ats_choices:
+            st.session_state["board_message"] = (
+                "warning",
+                "Select at least one ATS board to search.",
+            )
+        else:
+            with st.spinner("Checking public boards..."):
+                try:
+                    result = asyncio.run(
+                        discover_boards(
+                            ats_sources=ats_choices,
+                            max_candidates_per_ats=tokens_per_ats,
+                            offsets=st.session_state.get("discovery_offsets", {}),
+                        )
+                    )
+                    st.session_state["discovery_result"] = result
+                    st.session_state["discovery_offsets"] = result.get("next_offsets", {})
+                    found = result.get("candidates_total", 0)
+                    if found:
+                        st.session_state["board_message"] = (
+                            "success",
+                            f"Found {found} live companies. Select the ones to add.",
+                        )
+                    else:
+                        st.session_state["board_message"] = (
+                            "info",
+                            "No new live companies in this batch. Run discovery again for the next batch.",
+                        )
+                except Exception as exc:
+                    st.session_state.pop("discovery_result", None)
+                    st.session_state["board_message"] = (
+                        "error",
+                        f"Discovery failed: {exc}. Existing boards were not changed.",
+                    )
+        st.rerun()
+
+    discovery = st.session_state.get("discovery_result")
+    if discovery:
+        for error in discovery.get("errors", []):
+            st.warning(error)
+
+        options = []
+        lookup = {}
+        for ats, info in discovery["by_ats"].items():
+            for board in info.get("candidates", []):
+                label = (
+                    f"{board['name']} · {ats} · {board['token']} "
+                    f"({board['jobs']} job{'s' if board['jobs'] != 1 else ''})"
+                )
+                options.append(label)
+                lookup[label] = {"ats": ats, **board}
+
+        if options:
+            selected = st.multiselect("Select companies to add", options=options)
+            if st.button("➕ Add selected companies", use_container_width=True):
+                if not selected:
+                    st.warning("Select at least one company first.")
+                else:
+                    selections = {}
+                    for label in selected:
+                        record = lookup[label]
+                        selections.setdefault(record["ats"], []).append(record)
+                    try:
+                        summary = add_discovered_companies(selections)
+                    except Exception as exc:
+                        st.session_state["board_message"] = (
+                            "error",
+                            f"Could not save companies: {exc}. Existing boards were not changed.",
+                        )
+                    else:
+                        parts = []
+                        if summary["added_count"]:
+                            parts.append(f"{summary['added_count']} added")
+                        if summary["updated_count"]:
+                            parts.append(f"{summary['updated_count']} updated")
+                        if summary["unchanged_count"]:
+                            parts.append(f"{summary['unchanged_count']} already configured")
+                        if summary["invalid_count"]:
+                            parts.append(f"{summary['invalid_count']} invalid")
+                        detail = (": " + ", ".join(parts)) if parts else ""
+                        if summary["added_count"] or summary["updated_count"]:
+                            message = "Board list updated" + detail + "."
+                            level = "success"
+                        else:
+                            message = "No changes" + detail + "."
+                            level = "warning" if summary["invalid_count"] else "info"
+                        st.session_state["board_message"] = (level, message)
+                        st.session_state.pop("discovery_result", None)
+                    st.rerun()
+        else:
+            st.info("No new live companies in this batch. Run discovery again to check more.")
 
 # Overview Metrics
 stats = get_stats()

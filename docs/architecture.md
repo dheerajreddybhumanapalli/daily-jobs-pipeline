@@ -9,8 +9,10 @@ Streamlit dashboard, and the rules that keep it deduplicated and searchable.
 | --- | --- | --- |
 | Entry point / orchestrator | `src/pipeline.py` | Builds tasks, enforces concurrency, aggregates results, saves jobs, returns stats. |
 | CLI | `src/pipeline.py` (`__main__`) | Runs one full pipeline and prints the stats dict. |
-| Dashboard | `src/app.py` | Filters the database, shows metrics, triggers live fetches, exports CSV/JSON. |
-| Source config | `src/config/companies.py` | ATS board tokens and India/Hyderabad keyword lists. |
+| Discovery CLI | `src/discover_boards.py` | Lists validated board candidates and saves explicitly selected companies. |
+| Dashboard | `src/app.py` | Filters the database, shows metrics, triggers live fetches, runs opt-in discovery, exports CSV/JSON. |
+| Source config | `src/config/companies.py` | Curated board tokens, discovery-cache merge/save, and India/Hyderabad keyword lists. |
+| Board discovery | `src/scrapers/discovery.py` | Loads a public token index and validates candidate boards against live ATS APIs. |
 | ATS adapters | `src/scrapers/{greenhouse,lever,ashby}.py` | One company board → `list[JobItem]`. |
 | Free API adapters | `src/scrapers/free_apis.py` | Jobicy and Arbeitnow feeds → `list[JobItem]`. |
 | Shared scraper helpers | `src/scrapers/utils.py` | Deterministic job IDs, user agents, location classification. |
@@ -56,6 +58,27 @@ flowchart LR
     QUERY --> UI
     UI -->|Fetch Latest Jobs Now| PIPE
 ```
+
+### Company discovery flow (opt-in)
+
+```mermaid
+flowchart LR
+    INDEX[Public token index] --> DISC[discover_boards]
+    DISC -->|validate each token| API[Live ATS APIs]
+    API --> CAND[Validated candidates]
+    CAND --> USER{User selects companies?}
+    USER -->|no| STOP[Nothing written]
+    USER -->|yes| SAVE[add_discovered_companies]
+    SAVE --> CACHE[(discovered_boards.json)]
+    CACHE --> CFG[get_companies]
+    CFG --> PIPE[run_pipeline]
+```
+
+Discovery is deliberately split into two steps. `discover_boards()` performs
+network reads and returns candidates but never touches configuration.
+`add_discovered_companies()` is the only write path and persists just the
+companies the user selected. It reads the cache strictly, merges without
+duplicating tokens, and replaces the file atomically.
 
 ### 1. Task creation
 
@@ -206,6 +229,12 @@ source have dedicated exact-match filters.
   adapters swallow their own errors.
 - **Idempotent writes.** Native IDs plus SQLite upsert make reruns safe and the
   dashboard's "Fetch Latest Jobs Now" button repeatable.
+- **Opt-in configuration changes.** Discovery cannot silently expand the board
+  list. Candidates are validated first, and only explicit user selections are
+  persisted.
+- **Failure isolation over completeness.** One bad board must not fail a run, so
+  adapters swallow their own errors. A failed discovery likewise leaves the
+  existing board configuration untouched.
 - **Local-first storage.** SQLite needs no service and is easy to back up or
   inspect. The trade-off is single-machine, single-user access.
 - **UI-triggered runs are synchronous.** The Streamlit button blocks while the
@@ -215,7 +244,9 @@ source have dedicated exact-match filters.
 
 | Change | Where |
 | --- | --- |
-| Add a company on an existing ATS | `src/config/companies.py` |
+| Add a company on an existing ATS | `src/config/companies.py` or the discovery flow |
+| Change discovery sources, validation, or batch size | `src/scrapers/discovery.py` and `src/discover_boards.py` |
+| Change discovery cache format or merge rules | `add_discovered_companies()` in `src/config/companies.py` |
 | Add a new ATS or job API | New adapter in `src/scrapers/`, task wiring in `src/pipeline.py` |
 | Change location rules | Keyword lists in `src/config/companies.py` or `check_location()` |
 | Change search semantics | `src/db/search.py` (and its docstring/tests) |

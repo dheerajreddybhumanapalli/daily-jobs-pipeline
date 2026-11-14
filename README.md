@@ -39,12 +39,17 @@ scheduled run tries again.
 - **Multiple sources** — 22 Greenhouse boards, 4 Lever boards, 10 Ashby boards,
   plus Jobicy and Arbeitnow feeds (configurable in
   [`src/config/companies.py`](src/config/companies.py)).
+- **Opt-in company discovery** — search public Greenhouse, Lever, and Ashby
+  boards, then add only the companies you select. Nothing is added
+  automatically, repeated selections are idempotent, and a failed discovery
+  never changes existing configuration.
 - **Deduplication** — stable per-source job IDs (ATS-native IDs where available,
   SHA-256 fingerprints otherwise) are the SQLite primary key; re-runs upsert
   instead of duplicating.
 - **Token-aware role search** — `AI` matches *AI Engineer*, *GenAI*, and
   *AI/ML* without matching *Affairs* or *Spain*; `data eng` matches
-  *Senior Data Platform Engineer*. See [docs/configuration.md](docs/configuration.md#role-search-behavior).
+  *Senior Data Platform Engineer*. See
+  [docs/configuration.md](docs/configuration.md#role-search-behavior).
 - **Streamlit dashboard** — filters for role keyword, location
   (*Hyderabad Only* / *All India* / *Worldwide*), company, and source; metrics;
   one-click live fetch; CSV/JSON export.
@@ -96,8 +101,9 @@ streamlit run src/app.py
 ```
 
 The sidebar has filters, a **Fetch Latest Jobs Now** button that runs the
-pipeline in-process, and CSV/JSON download buttons for the current result set.
-The default view is **Hyderabad Only**, limited to the 500 most recent matches.
+pipeline in-process, a **Discover companies to add** panel, and CSV/JSON
+download buttons for the current result set. The default view is
+**Hyderabad Only**, limited to the 500 most recent matches.
 
 > Streamlit may ask for an email address the first time it runs interactively.
 > Set `STREAMLIT_BROWSER_GATHER_USAGE_STATS=false` or create a local
@@ -112,7 +118,8 @@ uv run python -m src.pipeline
 
 This fetches from every configured source, classifies locations, upserts results
 into `jobs.db`, and prints a summary. The command accepts **no flags**; the
-pipeline is configured in code (see [docs/configuration.md](docs/configuration.md)).
+pipeline is configured in code and the discovered-board cache (see
+[docs/configuration.md](docs/configuration.md)).
 
 ### Programmatic use
 
@@ -138,24 +145,80 @@ print(stats)
 
 ---
 
-## Configuration
+## Supported sources
 
-The two files you are most likely to edit:
+| ATS / API | Endpoint | Configured boards |
+| --- | --- | --- |
+| Greenhouse | `https://boards-api.greenhouse.io/v1/boards/{token}/jobs` | 22 |
+| Lever | `https://api.lever.co/v0/postings/{token}?mode=json` | 4 |
+| Ashby | `https://api.ashbyhq.com/posting-api/job-board/{token}` | 10 |
+| Workable | `https://apply.workable.com/api/v3/accounts/{token}/jobs` | 2 (not fetched yet) |
+| Jobicy | `https://jobicy.com/api/v2/remote-jobs` | feed |
+| Arbeitnow | `https://www.arbeitnow.com/api/job-board-api` | feed |
 
-| File | Purpose |
-| --- | --- |
-| [`src/config/companies.py`](src/config/companies.py) | ATS board tokens and India/Hyderabad keyword lists |
-| [`src/db/storage.py`](src/db/storage.py) | SQLite path (`DB_PATH = Path("jobs.db")`) |
+The curated boards live in
+[`src/config/companies.py`](src/config/companies.py). Workable tokens are
+present but no Workable adapter is wired into the pipeline.
 
-Add a company by appending its public board token:
+---
+
+## Add a company
+
+### Option 1 — Curated list (always active)
+
+Append a known board token to the matching list in
+[`src/config/companies.py`](src/config/companies.py):
 
 ```python
 GREENHOUSE_COMPANIES.append({"name": "Company Name", "token": "board_token"})
 ```
 
-Full details — adding companies, adding a new ATS source, tuning concurrency,
-search semantics, and all runtime options — are in
-[docs/configuration.md](docs/configuration.md).
+Confirm the endpoint responds before relying on it:
+
+```bash
+uv run python -c "import httpx; r=httpx.get('https://boards-api.greenhouse.io/v1/boards/<token>/jobs', timeout=15); print(r.status_code, len(r.json().get('jobs', [])))"
+```
+
+### Option 2 — Discover companies from public boards (opt-in)
+
+ATS APIs are per-company, so discovery reads a public token index, validates
+each candidate against the live API, and shows only boards that currently have
+jobs.
+
+From the dashboard:
+
+1. Open **🏢 Monitored Boards** → **🔎 Discover companies to add**.
+2. Choose the ATS boards to search and how many tokens to check per ATS.
+3. Click **Find companies**.
+4. Select the companies you want in the **Select companies to add** list.
+5. Click **Add selected companies**.
+
+From the CLI:
+
+```bash
+# List validated candidates only. This does not change configuration.
+uv run python -m src.discover_boards
+
+# Search fewer tokens or continue from a different offset.
+uv run python -m src.discover_boards --ats greenhouse,lever --candidates 50 --offset 100
+
+# Add only the companies you explicitly select.
+uv run python -m src.discover_boards --add greenhouse=stripe --add lever=palantir
+```
+
+Selection guarantees:
+
+- Only selected companies are written; discovery by itself is read-only.
+- Selecting a company that is already configured is a no-op, not a duplicate.
+- Existing curated entries are never modified.
+- Writes are atomic and refuse to overwrite a malformed
+  `src/config/discovered_boards.json`.
+- A network or index failure leaves the existing configuration untouched and is
+  reported in the UI or CLI.
+- The discovery cache is gitignored. Delete it to return to the curated list
+  only.
+
+Full details are in [docs/configuration.md](docs/configuration.md).
 
 ---
 
@@ -165,10 +228,12 @@ search semantics, and all runtime options — are in
 src/
   app.py                    Streamlit dashboard
   pipeline.py               Async orchestration and summary stats
-  config/companies.py       Board tokens + location keywords
+  discover_boards.py        Opt-in discovery CLI
+  config/companies.py       Curated boards, discovery cache merge/save, keywords
   db/models.py              JobItem schema
   db/storage.py             SQLite create/upsert/query/stats
   db/search.py              Token-aware partial role matching
+  scrapers/discovery.py     Board index loading and live token validation
   scrapers/                 Greenhouse, Lever, Ashby, Jobicy, Arbeitnow adapters
 docs/                       Architecture, configuration, operations
 AGENTS.md                   Contributor/agent guidance
@@ -192,7 +257,7 @@ commands.
 
 - [docs/README.md](docs/README.md) — documentation index
 - [docs/architecture.md](docs/architecture.md) — pipeline flow, modules, data model
-- [docs/configuration.md](docs/configuration.md) — sources, keywords, runtime options
+- [docs/configuration.md](docs/configuration.md) — sources, discovery, runtime options
 - [docs/operations.md](docs/operations.md) — setup, scheduling, troubleshooting
 - [AGENTS.md](AGENTS.md) — repository conventions for contributors and coding agents
 
@@ -202,6 +267,9 @@ commands.
 
 - ATS board tokens can change or disappear; such boards return 404 and are
   skipped for that run. Check the endpoint before reporting a missing company.
+- Discovery depends on a public, community-maintained token index. If the index
+  is unavailable, the workflow reports an error and configured boards keep
+  working.
 - There is no retry/backoff and no pagination beyond each API's defaults.
 - No tests, linter, or CI are configured yet.
 - `WORKABLE_COMPANIES` is present in the config but **not wired into the
