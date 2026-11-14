@@ -51,11 +51,13 @@ Notes:
 src/
   app.py                    Streamlit UI: filters, metrics, CSV/JSON export, live fetch
   pipeline.py               Async orchestration, concurrency limits, save + summary stats
-  config/companies.py       ATS board tokens, location keyword lists (edit targets here)
+  discover_boards.py        Opt-in discovery CLI (lists candidates; saves only selections)
+  config/companies.py       Curated board tokens, discovery-cache merge/save, keywords
   db/models.py              Pydantic JobItem schema
   db/storage.py             SQLite schema creation, upsert, query, stats
   db/search.py              Token-aware partial role matcher (also registered in SQLite)
   scrapers/utils.py         Job ID hashing, location classification, user agents
+  scrapers/discovery.py     Public token-index loading and live ATS board validation
   scrapers/greenhouse.py    Greenhouse ATS adapter
   scrapers/lever.py         Lever ATS adapter
   scrapers/ashby.py         Ashby ATS adapter
@@ -98,6 +100,11 @@ See [docs/architecture.md](docs/architecture.md) for the full flow and schema,
 - **Wire every new source into `src/pipeline.py`** behind an `include_*` flag and
   export it through the returned stats dict. The dashboard's source filter is
   populated from the database, so no UI change is needed.
+- **Company discovery stays opt-in.** `discover_boards()` is read-only; it may
+  fetch and validate candidates but must never write configuration. Persist only
+  explicit user selections through `add_discovered_companies()`. Keep writes
+  atomic, deduplicate by ATS + token, and never overwrite a malformed
+  `discovered_boards.json`.
 - **Schema changes** must update all of: `JobItem` (`db/models.py`), the table
   definition in `get_db()` (`db/storage.py`), the FTS column list if the field
   should be searchable, and both `save_jobs()` / `query_jobs()` if relevant.
@@ -137,12 +144,14 @@ There are currently no tests, linters, or CI. Before finishing a change:
 uv run python -m compileall -q src
 uv run python -c "from src.pipeline import run_pipeline; from src.db.storage import query_jobs, get_stats; from src.db.search import partial_match; print('imports ok')"
 uv run python -c "from src.db.search import partial_match; assert partial_match('AI', 'GenAI Engineer'); assert not partial_match('AI', 'Business Affairs'); print('search ok')"
+uv run python -c "from src.config.companies import add_discovered_companies; print('discovery config ok')"
 ```
 
 Then exercise the affected path:
 
 - Pipeline change: `uv run python -m src.pipeline`
 - UI change: `uv run streamlit run src/app.py` and load the page
+- Discovery change: `uv run python -m src.discover_boards --ats greenhouse --candidates 5` (read-only)
 - DB change: run a fetch and check `get_stats()` / `query_jobs()` output
 
 If you add tests, put them under `tests/`, add `pytest` as a dev dependency

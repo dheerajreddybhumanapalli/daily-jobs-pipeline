@@ -8,7 +8,7 @@ from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeEl
 from src.db.models import JobItem
 from src.db.storage import save_jobs
 from src.db.search import partial_match
-from src.config.companies import GREENHOUSE_COMPANIES, LEVER_COMPANIES, ASHBY_COMPANIES
+from src.config.companies import get_companies
 from src.scrapers.greenhouse import fetch_greenhouse_jobs
 from src.scrapers.lever import fetch_lever_jobs
 from src.scrapers.ashby import fetch_ashby_jobs
@@ -43,15 +43,15 @@ async def run_pipeline(
                 return await fn(*args)
 
         if include_greenhouse:
-            for comp in GREENHOUSE_COMPANIES:
+            for comp in get_companies("greenhouse"):
                 tasks.append(sem_task(fetch_greenhouse_jobs, client, comp))
 
         if include_lever:
-            for comp in LEVER_COMPANIES:
+            for comp in get_companies("lever"):
                 tasks.append(sem_task(fetch_lever_jobs, client, comp))
 
         if include_ashby:
-            for comp in ASHBY_COMPANIES:
+            for comp in get_companies("ashby"):
                 tasks.append(sem_task(fetch_ashby_jobs, client, comp))
 
         if include_apis:

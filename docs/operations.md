@@ -39,6 +39,39 @@ Use **Fetch Latest Jobs Now** in the sidebar. This runs
 `asyncio.run(run_pipeline(role_filter=None))` inside the Streamlit process and
 then reruns the page. The UI is blocked while the fetch is in progress.
 
+### Discover companies (opt-in)
+
+Discovery is separate from fetching jobs and is always read-only until you
+confirm a selection.
+
+From the dashboard: **🏢 Monitored Boards** → **🔎 Discover companies to add** →
+**Find companies** → select companies → **Add selected companies**.
+
+From the CLI:
+
+```bash
+# List validated candidates only (no configuration changes).
+uv run python -m src.discover_boards
+
+# Inspect 50 tokens per ATS starting at offset 100.
+uv run python -m src.discover_boards --ats greenhouse,lever --candidates 50 --offset 100
+
+# Persist only the companies you explicitly choose.
+uv run python -m src.discover_boards --add greenhouse=stripe --add lever=palantir
+```
+
+- Each discovery run reports how many tokens it checked and how many live boards
+  it found. Dead tokens are skipped.
+- The dashboard remembers the next offset for the current Streamlit session, so
+  clicking again checks the next batch.
+- A network/index failure prints an error and never edits existing boards.
+- Selections are merged idempotently into `src/config/discovered_boards.json`.
+- If that file is malformed, saving refuses to overwrite it; fix or delete the
+  file and try again.
+
+See [Configuration](configuration.md#discover-companies-from-public-boards) for
+the merge rules.
+
 ### Programmatic partial run
 
 ```python
@@ -203,6 +236,21 @@ The file is disposable and rebuildable from public sources.
 
 Use a reset after changing the schema or job-ID logic. There are no migrations.
 
+## Reset discovered boards
+
+Discovery selections are stored separately from the curated list:
+
+- PowerShell: `Remove-Item src/config/discovered_boards.json`
+- POSIX: `rm src/config/discovered_boards.json`
+
+The next pipeline run falls back to the curated boards only. The Streamlit
+session also keeps discovery offsets in memory; restart the app to start a new
+scan from the beginning, or use the CLI `--offset 0`.
+
+If the file is malformed, normal pipeline runs ignore it, but saving a new
+selection refuses to overwrite it. Delete the file (or fix the JSON) before
+adding companies again.
+
 ## Upgrading
 
 ```bash
@@ -227,6 +275,10 @@ dependencies.
 | --- | --- | --- |
 | Dashboard says no jobs | Pipeline never ran, or it wrote to a different working directory | Run from the repo root; check `get_stats()` and `jobs.db` timestamps. |
 | A company never appears | Wrong/stale board token, company moved ATS, or board is private | Verify the board URL/API directly; the pipeline skips 404 boards silently. |
+| Discovery finds nothing | All checked tokens are dead or already configured | Raise **Boards to check per ATS**, run discovery again for the next batch, or use a different `--offset`. |
+| Discovery fails | Public token index or ATS API is unreachable | Check connectivity and retry; existing configured boards are unaffected. |
+| `discovered_boards.json is not valid JSON` when saving | Malformed discovery cache | Fix the JSON or delete `src/config/discovered_boards.json`, then rediscover. |
+| Selected company is not in the list | It was already configured, or it was not checked in that batch | Check **Monitored Boards** counts; run discovery again or add the token to the curated list. |
 | `ModuleNotFoundError: src` | Command run outside the repo root, or `src/app.py` imported instead of launched | `cd` to the repo root; use `uv run streamlit run src/app.py`. |
 | `uv: command not found` | uv not installed or not on the scheduler's `PATH` | Install uv or use an absolute path; plain `python` works with an activated venv. |
 | `database is locked` | Two writers (scheduled run + dashboard fetch, or two CLI runs) | Stop the other process; serialize scheduled runs. |
@@ -258,6 +310,7 @@ After any change, run:
 ```bash
 uv run python -m compileall -q src
 uv run python -m src.pipeline
+uv run python -m src.discover_boards --ats greenhouse --candidates 5
 uv run python -c "from src.db.storage import get_stats; print(get_stats())"
 uv run streamlit run src/app.py
 ```

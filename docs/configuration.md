@@ -1,7 +1,8 @@
 # Configuration
 
-Everything is configured in code or with command-line options to Streamlit.
-There are **no environment variables, secrets, or config files required**.
+Most settings live in code or command-line options to Streamlit. There are **no
+environment variables or secrets required**. The opt-in company discovery flow
+writes a gitignored runtime cache (`src/config/discovered_boards.json`).
 
 Run all commands from the repository root so relative paths resolve correctly.
 
@@ -10,6 +11,7 @@ Run all commands from the repository root so relative paths resolve correctly.
 | Setting | Location | Current value |
 | --- | --- | --- |
 | ATS companies | `src/config/companies.py` | 22 Greenhouse, 4 Lever, 10 Ashby |
+| Discovered companies | `src/config/discovered_boards.json` | runtime cache, created only by selection |
 | Location keywords | `src/config/companies.py` | `HYDERABAD_KEYWORDS`, `INDIA_KEYWORDS` |
 | Database path | `src/db/storage.py` | `DB_PATH = Path("jobs.db")` |
 | Concurrency | `run_pipeline()` in `src/pipeline.py` | `asyncio.Semaphore(10)`, 50 ms jitter |
@@ -71,6 +73,12 @@ ASHBY_COMPANIES = [
 task is created** in `run_pipeline()`. Editing that list has no effect until a
 scraper is implemented.
 
+### Discovered boards
+
+Companies added through the discovery flow are stored in
+`src/config/discovered_boards.json` and merged with the curated lists at read
+time. See [Discover companies from public boards](#discover-companies-from-public-boards).
+
 ## Add a company
 
 1. Identify the ATS and board token. The token is the slug in the public careers
@@ -98,6 +106,80 @@ scraper is implemented.
 
 If the board returns 404, the token is wrong, the company moved ATS, or the
 board is private. The pipeline skips it without failing.
+
+To add a board without editing source, use the opt-in discovery flow below. It
+stores selections in the runtime cache instead of `src/config/companies.py`.
+
+## Discover companies from public boards
+
+ATS vendors do not provide a global "list every board" endpoint. Discovery
+instead reads a public, community-maintained token index, validates each token
+against the live ATS API, and offers only boards that currently have jobs. Every
+request still goes to the official public endpoint for that company.
+
+Discovery is **read-only**. It returns candidates; nothing is written until you
+select companies and confirm. The dashboard flow is:
+
+1. **🏢 Monitored Boards** → **🔎 Discover companies to add**.
+2. Choose the ATS sources and the number of tokens to check per ATS.
+3. Click **Find companies**.
+4. Select the companies you want.
+5. Click **Add selected companies**.
+
+The CLI exposes the same split:
+
+```bash
+# Read-only: print validated candidates, change nothing.
+uv run python -m src.discover_boards
+
+# Search a specific set and continue from a later offset.
+uv run python -m src.discover_boards --ats greenhouse,lever --candidates 50 --offset 100
+
+# Add only explicitly selected companies.
+uv run python -m src.discover_boards --add greenhouse=stripe --add lever=palantir
+```
+
+Selection rules:
+
+- Only the selected companies are added or updated.
+- A token already in a curated list is reported as unchanged; the curated list is
+  never modified.
+- A token already in the discovery cache is updated in place (name/job count),
+  not inserted again.
+- Repeating the same selection is idempotent.
+- Invalid tokens are rejected before writing.
+- Writes use a temporary file and an atomic replace.
+- A malformed cache raises `DiscoveryConfigError` and is left untouched; normal
+  pipeline runs simply ignore a malformed cache.
+- If the public index or an ATS API is unavailable, discovery reports the error
+  and existing boards keep working.
+
+### Discovery cache
+
+`src/config/discovered_boards.json` is merged with the curated lists by
+`get_companies()` at read time and deduplicated case-insensitively by token. It
+is gitignored. Example:
+
+```json
+{
+  "greenhouse": [
+    {
+      "name": "Example Co",
+      "token": "exampleco",
+      "jobs": 12,
+      "added_at": "2026-01-01T00:00:00+00:00"
+    }
+  ]
+}
+```
+
+Delete the file to return to the curated list only. In the dashboard, each
+discovery run continues from the last checked offset; deleting the file does not
+reset that in-memory offset, so restart the Streamlit process (or use the CLI
+`--offset`) if you want to scan from the beginning again.
+
+`get_all_companies()` returns the effective per-ATS lists, and
+`add_discovered_companies()` is the only supported write path.
 
 ## Add a new ATS or job API
 

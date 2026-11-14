@@ -9,6 +9,10 @@ wheels/
 # Databases
 *.db
 
+# Runtime caches
+src/config/discovered_boards.json
+src/config/discovered_boards.json.tmp
+
 # Virtual environments
 .venv
 
